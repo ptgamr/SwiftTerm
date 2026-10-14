@@ -71,6 +71,23 @@ struct IOSPointerInputTests {
         #expect(pointerPans.allSatisfy { $0.allowedTouchTypes.isEmpty })
     }
 
+    @Test func hostScrollRoutingDisablesPointerReports() async {
+        let (view, delegate, gesture) = await fixture()
+        view.managesProgramScrollGestures = false
+        #expect(!view.shouldCapturePointerScroll(gesture))
+        view.forwardPointerScroll(distance: view.cellDimension.height, gestureRecognizer: gesture)
+        await drainCallbacks()
+        #expect(delegate.writes.isEmpty)
+        #expect(view.terminalInputStateSnapshot()?.mouseMode == .vt200)
+
+        view.managesProgramScrollGestures = true
+        #expect(view.shouldCapturePointerScroll(gesture))
+        view.forwardPointerScroll(distance: view.cellDimension.height, gestureRecognizer: gesture)
+        await drainCallbacks()
+        #expect(strings(delegate).count == 1)
+        #expect(strings(delegate).first?.hasPrefix("\u{1b}[<64;") == true)
+    }
+
     @Test func wheelDirectionAndFractionalTravel() async {
         let (view, delegate, gesture) = await fixture()
         let height = view.cellDimension.height
