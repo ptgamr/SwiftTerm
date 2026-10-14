@@ -483,7 +483,6 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         setupProgressBar()
         setupGestures ()
         setupLinkReportingInteractions()
-        setupAccessoryView ()
         setupTextBlinking()
         didFinishSetup = true
     }
@@ -491,6 +490,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     open override func didMoveToWindow() {
         super.didMoveToWindow()
         guard uiShutdownState == .active else { return }
+        if window != nil {
+            clearInputAssistantShortcuts()
+        }
         frameDriver.setWindowAttachedOnMain(window != nil)
         refreshCachedViewState()
         frameDriver.markDirty()
@@ -1622,21 +1624,38 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// You can set this property to a UIView to be your input accessory, by default
     /// this is an instance of `TerminalAccessory`
     ///
+    /// The default accessory is created only when UIKit requests it while the view is in a
+    /// window, unless the host has assigned an accessory (including `nil`). Creating a keyboard
+    /// input view before attachment can leave an enclosing SwiftUI layout stale on iOS 27.
     #if os(visionOS)
     public var inputAccessoryView: UIView? {
-        get { _inputAccessory }
+        get {
+            createDefaultInputAccessoryIfNeeded()
+            return _inputAccessory
+        }
         set {
+            inputAccessoryAssigned = true
             _inputAccessory = newValue
         }
     }
     #else
     public override var inputAccessoryView: UIView? {
-        get { _inputAccessory }
+        get {
+            createDefaultInputAccessoryIfNeeded()
+            return _inputAccessory
+        }
         set {
+            inputAccessoryAssigned = true
             _inputAccessory = newValue
         }
     }
     #endif
+
+    private func createDefaultInputAccessoryIfNeeded ()
+    {
+        guard !inputAccessoryAssigned, window != nil else { return }
+        setupAccessoryView ()
+    }
 
     ///
     /// You can set this property to a UIView to be your input accessory, by default
@@ -1656,15 +1675,22 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    /// Clear shortcuts only after attachment. Reading `inputAssistantItem` from init can
+    /// shift an enclosing SwiftUI screen on the first iOS 27 keyboard presentation.
+    /// Repeat on every attach so cached views keep the same keyboard layout after tab switches.
+    private func clearInputAssistantShortcuts ()
+    {
+        #if !os(visionOS)
+        inputAssistantItem.leadingBarButtonGroups = []
+        inputAssistantItem.trailingBarButtonGroups = []
+        #endif
+    }
+
     func setupAccessoryView ()
     {
         let short = UIDevice.current.userInterfaceIdiom == .phone
         let ta = TerminalAccessory(frame: CGRect(x: 0, y: 0, width: frame.width, height: short ? 36 : 48),
                                    inputViewStyle: .keyboard, container: self)
-        #if !os(visionOS)
-        inputAssistantItem.leadingBarButtonGroups = []
-        inputAssistantItem.trailingBarButtonGroups = []
-        #endif
         ta.sizeToFit()
         inputAccessoryView = ta
         
@@ -3881,6 +3907,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             refreshProgramScrollGesture()
         }
     }
+
+    /// Tracks an explicit host choice, including nil, without creating a keyboard input view.
+    private var inputAccessoryAssigned = false
 }
 
 @MainActor
