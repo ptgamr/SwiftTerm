@@ -97,6 +97,35 @@ Ordering between concurrent callers is the caller's problem. Two threads
 sending at once interleave their bytes in the pty, exactly as two processes
 writing to one file descriptor would.
 
+## Inspecting contents without mutable terminal access
+
+Use ``Terminal/inputStateSnapshot()`` for a cheap copy of dimensions and input
+modes. Use ``Terminal/contentSnapshot(region:)`` to copy either the viewport or
+the live screen plus a bounded number of scrollback rows. ``TerminalView`` and
+``HeadlessTerminal`` expose convenience wrappers with the `terminal` prefix.
+The view wrappers return `nil` when no terminal session is attached. These
+methods are safe to call from any thread, except inside a callback that already
+holds the terminal lock.
+
+A content snapshot captures its input state, row coordinates, complete cell
+text, widths, attributes, and row-wrap flags in one transaction. Its
+`capturedRange` uses scroll-invariant absolute row numbers; it describes only
+the copied window, not all retained history. The computed row text is
+right-trimmed display text using the same conversion as
+``TerminalView/visibleRowsText(_:)`` and
+``TerminalVisibleRowSnapshot/text``: wide-character continuation cells are
+omitted, interior empty cells become spaces, trailing unwritten cells are
+dropped, and internal NUL placeholders are not exposed. If a view host only
+needs a few visible row strings, ``TerminalView/visibleRowsText(_:)`` is the
+cheaper API; use content snapshots when you need bounded history, input state,
+cell widths, attributes, or wrap flags. The copied cells still preserve complete
+cell text and widths, so hosts that need column mapping should use cells
+instead of Swift string indices.
+
+This is a pure inspection snapshot and does not mutate renderer damage state.
+Use ``Terminal/makeRenderSnapshot(scope:)`` for renderer input. Content
+snapshots intentionally omit images, hyperlinks, and palette values.
+
 ## Delegate callbacks and the terminal lock
 
 Terminal delegate methods can fire on the parse thread with the terminal lock
@@ -104,6 +133,41 @@ held. Keep them short, and marshal anything that touches your UI to the main
 thread yourself. Reading terminal state inside such a callback is fine — you
 already hold the lock — but calling back into SwiftTerm APIs that take it is
 not.
+
+## Look up a link at a point
+
+Call ``TerminalView/link(at:mode:)`` on the main actor. Give a point in view
+coordinates. The method takes the terminal lock and uses the hit test of a click
+or tap. This hit test uses the scroll position and the BiDi layout. Highlight
+settings and modifier keys do not change the result.
+
+```swift
+// On macOS, convert the event location from window coordinates.
+let point = terminalView.convert(event.locationInWindow, from: nil)
+if let result = terminalView.link(at: point) {
+    inspectLink(result.link, parameters: result.params)
+}
+
+// On iOS, use the gesture location. Do not add contentOffset to it.
+let point = gesture.location(in: terminalView)
+let result = terminalView.link(at: point, mode: .explicitAndImplicit)
+```
+
+The default mode returns explicit OSC 8 links only. An implicit link has an
+empty parameter dictionary. A lookup does not select text, and it does not open
+the link.
+
+``TerminalView/gridPosition(at:)`` returns a buffer row and a logical column.
+Both methods return `nil` when the point is not on a visible cell.
+``TerminalView/cellSize`` returns the current cell size in view points.
+
+## Host-owned scrolling on iOS
+
+Set `terminalView.managesProgramScrollGestures = false` when the host owns
+one-finger wheel or fling routing. This prevents the built-in program-scroll
+recognizer from being installed after alternate-buffer or mouse-mode changes.
+Mouse reporting and viewport updates remain enabled; the host decides when to
+allow the scroll view's native scrollback pan.
 
 ## Topics
 
