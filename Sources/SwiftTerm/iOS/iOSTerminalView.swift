@@ -819,7 +819,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// - Parameters:
     ///   - gesture: the location of where the event took place
     /// - Returns: both the position where the event took place (either in screen resolution, or buffer relative) and the pixel position to construct the menu location
-    func calculateTapHit (gesture: UIGestureRecognizer) -> (grid: Position, pixels: Position)
+    func calculateTapHit (gesture: UIGestureRecognizer) -> (grid: Position, pixels: Position, isInGrid: Bool)
     {
         return calculateTapHit(point: gesture.location(in: self))
     }
@@ -827,14 +827,18 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// Returns a buffer-relative position, instead of a screen position.
     /// - Parameter point: location of where the event took place in view coordinates
     /// - Returns: both the position where the event took place (either in screen resolution, or buffer relative) and the pixel position to construct the menu location
-    func calculateTapHit (point: CGPoint) -> (grid: Position, pixels: Position)
+    func calculateTapHit (point: CGPoint) -> (grid: Position, pixels: Position, isInGrid: Bool)
     {
         withTerminal { _ in
             calculateTapHitLocked(point: point)
         }
     }
 
-    func calculateTapHitLocked (point: CGPoint) -> (grid: Position, pixels: Position)
+    /// Returns the buffer cell at a point, and the pixel position of the point.
+    ///
+    /// The hit test clamps the column to the grid. `isInGrid` is false when
+    /// the point is not on a cell of the buffer.
+    func calculateTapHitLocked (point: CGPoint) -> (grid: Position, pixels: Position, isInGrid: Bool)
     {
         terminal.terminalLock.preconditionLocked()
         func toInt (_ p: CGPoint) -> Position {
@@ -858,13 +862,18 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                     pixelCount: height))
         }
 
-        let col = Int (point.x / cellDimension.width)
-        let row = Int (point.y / cellDimension.height)
+        let colOffset = point.x / cellDimension.width
+        let rowOffset = point.y / cellDimension.height
+        let col = Int (colOffset)
+        let row = Int (rowOffset)
         if row < 0 {
-            return (Position(col: 0, row: 0), toInt (point))
+            return (Position(col: 0, row: 0), toInt (point), false)
         }
         var logicalColumn = min(max(0, col), terminal.cols - 1)
         let displayBuffer = terminal.displayBuffer
+        // Int rounds toward zero, so the sign test of the offsets is necessary.
+        let isInGrid = colOffset >= 0 && col < terminal.cols
+            && rowOffset >= 0 && row < displayBuffer.lines.count
         if row < displayBuffer.lines.count,
            let bidiLayout = TerminalBidi.layout(row: row, buffer: displayBuffer,
                                                 cols: terminal.cols, terminal: terminal,
@@ -873,7 +882,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
            logicalColumn < bidiLayout.visualToLogicalCol.count {
             logicalColumn = bidiLayout.visualToLogicalCol[logicalColumn]
         }
-        return (Position(col: logicalColumn, row: row), toInt(point))
+        return (Position(col: logicalColumn, row: row), toInt(point), isInGrid)
     }
 
     func encodeFlags (release: Bool) -> Int
@@ -1211,6 +1220,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     /// Pointer travel is separate from finger travel. Positive pan translation moves up.
     func forwardPointerScroll(distance: CGFloat, gestureRecognizer: UIGestureRecognizer) {
+        guard managesProgramScrollGestures else {
+            pointerScrollAccumulator.reset()
+            return
+        }
         forwardWheel(distance: distance,
                      point: gestureRecognizer.location(in: self),
                      modifiers: gestureRecognizer.modifierFlags,
@@ -1314,7 +1327,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 
     func shouldCapturePointerScroll(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard terminal != nil else { return false }
+        guard managesProgramScrollGestures, terminal != nil else { return false }
         return withTerminal { terminal in
             !shiftBypassesMouseReportingLocked(for: gestureRecognizer) &&
                 ProgramScrollRouting.capturesGesture(
@@ -3721,6 +3734,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     private func refreshProgramScrollGesture(mouseMode: Terminal.MouseMode? = nil) {
         pointerScrollAccumulator.reset()
+        guard managesProgramScrollGestures else {
+            disableMousePanGesture()
+            return
+        }
         let capturesProgramScroll = withTerminal { terminal in
             ProgramScrollRouting.capturesGesture(
                 allowMouseReporting: allowMouseReporting,
@@ -3854,6 +3871,16 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     nonisolated let kittyClipboardBridge = AppleKittyClipboardBridge()
     private var pointerScrollAccumulator = WheelDistanceAccumulator<ProgramScrollRoute>()
     private var pointerScrollDelegate: PointerScrollGestureDelegate?
+
+    /// Whether the view handles built-in finger and pointer program scrolling.
+    /// Hosts with their own wheel/fling routing can disable this independently of mouse
+    /// reporting. Buffer switches and mode changes still update the viewport normally.
+    public var managesProgramScrollGestures: Bool = true {
+        didSet {
+            guard managesProgramScrollGestures != oldValue, terminal != nil else { return }
+            refreshProgramScrollGesture()
+        }
+    }
 }
 
 @MainActor
