@@ -262,8 +262,14 @@ struct IOSPointerInputTests {
 
     @Test func hoverKeepsControlLatchAndUsesHardwareModifiers() async {
         let (view, delegate, _) = await fixture("\u{1b}[?1003h\u{1b}[?1006h")
+        // The built-in toolbar is now lazy: UIKit requests it only from an attached view.
+        let window = UIWindow(frame: view.bounds)
+        window.addSubview(view)
+        defer { window.subviews.forEach { $0.removeFromSuperview() } }
+        let accessory = view.inputAccessoryView as? TerminalAccessory
+        #expect(accessory != nil)
         view.controlModifier = true
-        view.terminalAccessory?.controlModifier = true
+        accessory?.controlModifier = true
         view.forwardPointerHover(at: CGPoint(x: 10, y: 10), modifiers: [.alternate, .control])
         await drainCallbacks()
         #expect(strings(delegate).first?.hasPrefix("\u{1b}[<59;") == true)
