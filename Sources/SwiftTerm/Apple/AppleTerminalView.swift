@@ -3311,17 +3311,6 @@ extension TerminalView {
             return decoded
         }
 
-        func drawKittyImage(_ image: TTImage, in rect: CGRect) {
-            #if os(iOS) || os(visionOS)
-            // The text renderer has already changed UIKit's context to Quartz's
-            // bottom-left origin. UIImage.draw would apply another image flip.
-            guard let cgImage = image.cgImage else { return }
-            context.draw(cgImage, in: rect)
-            #else
-            image.draw(in: rect)
-            #endif
-        }
-
         func drawKittyPlacements(
             onScreenRow screenRow: Int,
             lineOrigin: CGPoint,
@@ -3351,7 +3340,7 @@ extension TerminalView {
                 guard rect.width > 0, rect.height > 0 else { continue }
                 context.saveGState()
                 context.clip(to: lineRect)
-                drawKittyImage(image, in: rect)
+                image.draw(in: rect)
                 context.restoreGState()
             }
         }
@@ -3755,7 +3744,7 @@ extension TerminalView {
                                           height: cellDimension.height)
                     context.saveGState()
                     context.clip(to: cellRect)
-                    drawKittyImage(image, in: imageRect)
+                    image.draw(in: imageRect)
                     context.restoreGState()
                 }
             }
